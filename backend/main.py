@@ -4,6 +4,7 @@ import shutil
 import uvicorn
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from web3 import Web3
 import google.generativeai as genai
 import warnings
@@ -38,6 +39,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+@app.get("/favicon.ico")
+def favicon():
+    return FileResponse("favicon.ico")
+
 
 genai.configure(api_key=GEMINI_API_KEY)
 w3 = Web3(Web3.HTTPProvider(CRONOS_RPC))
