@@ -45,7 +45,7 @@ def analyze_claim_image(image_path):
         }
         Rules: Approve if damage is clear and cost < half of the item's original value.
         """
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-3-flash-preview")
         result = model.generate_content([myfile, prompt])
         return result.text
     except Exception as e:
