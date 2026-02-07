@@ -31,7 +31,7 @@ export default function Dashboard() {
       // Force a 3-second delay so we can enjoy the cool animation
       await new Promise(r => setTimeout(r, 3000));
       
-      const response = await axios.post("http://127.0.0.1:8000/analyze", formData);
+     const response = await axios.post("http://127.0.0.1:8000/analyze", formData);
       setResult(response.data);
     } catch (error) {
       console.error("Error uploading file:", error);

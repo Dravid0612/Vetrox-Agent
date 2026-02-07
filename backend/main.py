@@ -6,18 +6,21 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from web3 import Web3
 import google.generativeai as genai
+import warnings
 
-# --- CONFIGURATION ---
+# --- 1. CONFIGURATION ---
+warnings.filterwarnings("ignore") # Hides the Google warning
 GEMINI_API_KEY = "YOUR_GEMINI_API_KEY_HERE"
 
 # Cronos Testnet Settings
 CRONOS_RPC = "https://evm-t3.cronos.org"
 SENDER_ADDRESS = "YOUR_WALLET_ADDRESS_HERE"
 SENDER_PRIVATE_KEY = "YOUR_PRIVATE_KEY_HERE" 
-RECEIVER_ADDRESS = "0x..." # Target wallet for payout
+RECEIVER_ADDRESS = "0x..." # Target wallet (e.g., your own for testing)
 
-# --- SETUP ---
+# --- 2. SETUP ---
 app = FastAPI()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,7 +32,8 @@ app.add_middleware(
 genai.configure(api_key=GEMINI_API_KEY)
 w3 = Web3(Web3.HTTPProvider(CRONOS_RPC))
 
-# --- HELPER FUNCTIONS ---
+# --- 3. HELPER FUNCTIONS (Must be defined before use) ---
+
 def analyze_claim_image(image_path):
     try:
         myfile = genai.upload_file(image_path)
@@ -50,6 +54,15 @@ def analyze_claim_image(image_path):
         return result.text
     except Exception as e:
         return json.dumps({"decision": "REJECT", "reason": f"AI Error: {str(e)}"})
+
+def _mock_transfer():
+    """Fallback if blockchain fails so demo still works"""
+    return {
+        "status": "simulated",
+        "amount": "250 USD (Simulated)",
+        "transaction_id": "0xSIMULATED_HASH_FOR_DEMO",
+        "explorer_link": "#"
+    }
 
 def transfer_funds(amount_usd):
     try:
@@ -82,20 +95,18 @@ def transfer_funds(amount_usd):
     except Exception:
         return _mock_transfer()
 
-def _mock_transfer():
-    return {
-        "status": "simulated",
-        "amount": "250 USD (Simulated)",
-        "transaction_id": "0xSIMULATED_HASH_FOR_DEMO",
-        "explorer_link": "#"
-    }
+# --- 4. API ENDPOINTS ---
 
-# --- API ENDPOINT ---
+@app.get("/")
+def read_root():
+    return {"status": "Online", "message": "Vetrox Backend is Running"}
+
 @app.post("/analyze")
 async def analyze_endpoint(file: UploadFile = File(...)):
     temp_filename = f"temp_{file.filename}"
     
     try:
+        # Save the uploaded file temporarily
         with open(temp_filename, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
@@ -104,6 +115,7 @@ async def analyze_endpoint(file: UploadFile = File(...)):
         
         # Parse JSON
         if isinstance(raw_result, str):
+            # Clean up potential markdown formatting from AI
             clean_json = raw_result.replace("```json", "").replace("```", "").strip()
             try:
                 result = json.loads(clean_json)
@@ -114,6 +126,7 @@ async def analyze_endpoint(file: UploadFile = File(...)):
 
         # Blockchain Logic
         decision = result.get("decision", "").strip().upper()
+        
         if decision == "APPROVE":
             payout_data = transfer_funds(result.get("estimated_cost", 0))
             result["payout_details"] = payout_data
@@ -122,6 +135,7 @@ async def analyze_endpoint(file: UploadFile = File(...)):
             result["action_taken"] = "NONE"
             result["payout_details"] = None
 
+        # Cleanup
         if os.path.exists(temp_filename):
             os.remove(temp_filename)
             
