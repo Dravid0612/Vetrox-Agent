@@ -8,13 +8,13 @@ from web3 import Web3
 import google.generativeai as genai
 
 # --- CONFIGURATION ---
-GEMINI_API_KEY = "YOUR_GEMINI_API_KEY_HERE"
+GEMINI_API_KEY="AIzaSyBOg1K2Bujp-HhIDAVd8fXTie1ivmanmCo"
 
 # Cronos Testnet Settings
 CRONOS_RPC = "https://evm-t3.cronos.org"
-SENDER_ADDRESS = "YOUR_WALLET_ADDRESS_HERE"
-SENDER_PRIVATE_KEY = "YOUR_PRIVATE_KEY_HERE" 
-RECEIVER_ADDRESS = "0x..." # Target wallet for payout
+SENDER_ADDRESS = "0x8adE4c7e51c1cf9c314641154fF7aa83a39Cf2ba"
+SENDER_PRIVATE_KEY = "11f155cc425d0af9a2e794d2413ad55915d604aef912828a01ec2a3ffc6b0fd7" 
+RECEIVER_ADDRESS = "0x469a3eec26D6Df75fd8A27e152ce711a35272a14" # Target wallet for payout
 
 # --- SETUP ---
 app = FastAPI()
@@ -39,11 +39,11 @@ def analyze_claim_image(image_path):
             "item_name": "Item Name",
             "damage_description": "Short description",
             "severity": "Low/Medium/High",
-            "estimated_cost": 250,
+            "estimated_cost": based on the severity and damage and item type,
             "decision": "APPROVE" or "REJECT",
             "reason": "Reasoning"
         }
-        Rules: Approve if damage is clear and cost < $500.
+        Rules: Approve if damage is clear and cost < half of the item's original value.
         """
         model = genai.GenerativeModel("gemini-1.5-flash")
         result = model.generate_content([myfile, prompt])
