@@ -8,22 +8,28 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from web3 import Web3
-from web3.middleware import geth_poa_middleware
+# --- FIX 1: Update Middleware Import for Web3.py v7+ ---
+from web3.middleware import ExtraDataToPOAMiddleware
 import google.generativeai as genai
-from dotenv import load_dotenv 
+from dotenv import load_dotenv
+
 load_dotenv()
+
 # --- 1. CONFIGURATION ---
 warnings.filterwarnings("ignore")
 
-# 🔑 FILL THESE IN!
+# 🔑 ENV VARIABLES
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# WALLET SETUP (Hardcoded for your demo)
 OWNER_WALLET = "0x8adE4c7e51c1cf9c314641154fF7aa83a39Cf2ba"
 OWNER_PRIVATE_KEY = "11f155cc425d0af9a2e794d2413ad55915d604aef912828a01ec2a3ffc6b0fd7"
 
 # 🔗 SEPOLIA CONFIGURATION
 RPC_URL = "https://rpc.sepolia.org"
 CHAIN_ID = 11155111
-CONTRACT_ADDRESS = "0x254112a5f7cDEb51AEfD16c903A705f0647B3921" 
+CONTRACT_ADDRESS = "0x254112a5f7cDEb51AEfD16c903A705f0647B3921"
+
 CONTRACT_ABI = [
     {
         "inputs": [{"internalType": "address payable","name": "_user","type": "address"},
@@ -56,19 +62,27 @@ app.add_middleware(
 
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# In-Memory DB for appeals
 APPEALS_DB = []
 
 genai.configure(api_key=GEMINI_API_KEY)
 w3 = Web3(Web3.HTTPProvider(RPC_URL))
-w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+
+# --- FIX 2: Inject Middleware correctly for Web3 v7+ ---
+w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+
 contract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
+
+# --- 3. HELPER FUNCTIONS ---
 
 def send_blockchain_tx(function_name, user_address, amount_usd):
     try:
         if not w3.is_connected():
             return {"status": "error", "message": "Blockchain disconnected"}
 
-        amount_eth = 0.0001 
+        # For Demo: Fixed small amount (0.0001 ETH) regardless of claim value
+        amount_eth = 0.0001
         amount_wei = w3.to_wei(amount_eth, 'ether')
 
         func = contract.functions[function_name](user_address, amount_wei)
@@ -106,16 +120,28 @@ def analyze_claim_image(image_path):
             "decision": "APPROVE" or "REJECT",
             "reason": "Reasoning"
         }
-        Rules: Approve ONLY if damage is extremely clear (like broken glass). and estimated cost < the actual cost of the item Reject if ambiguous.
+        Rules: Approve ONLY if damage is extremely clear (like broken glass). Reject if ambiguous.
         """
-        model = genai.GenerativeModel("gemini-3-flash-preview")
+        # Using stable Gemini Flash model
+        model = genai.GenerativeModel("gemini-1.5-flash")
         result = model.generate_content([myfile, prompt])
+        
+        # Clean up markdown if AI adds it
         clean = result.text.replace("```json", "").replace("```", "").strip()
         return json.loads(clean)
     except Exception as e:
+        # Return a safe dictionary if AI fails
         return {"decision": "REJECT", "reason": f"AI Error: {str(e)}", "estimated_cost_usd": 0}
 
 # --- 4. API ENDPOINTS ---
+
+# 👇 THIS FIXES THE "NOT FOUND" ERROR ON HOME PAGE
+@app.get("/")
+def read_root():
+    return {
+        "status": "Vetrox Backend is Running", 
+        "docs_url": "http://127.0.0.1:8000/docs"
+    }
 
 @app.get("/appeals")
 def get_appeals():
@@ -125,6 +151,7 @@ def get_appeals():
 @app.post("/approve_appeal/{claim_id}")
 def approve_appeal(claim_id: str):
     """Admin manually approves a claim"""
+    # Find the claim in our memory DB
     claim = next((item for item in APPEALS_DB if item["id"] == claim_id), None)
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found")
@@ -139,14 +166,18 @@ def approve_appeal(claim_id: str):
 
 @app.post("/analyze")
 async def analyze_endpoint(file: UploadFile = File(...)):
+    # Create unique ID and filename
     claim_id = str(uuid.uuid4())[:8]
     filename = f"static/{claim_id}_{file.filename}"
     
+    # Save file
     with open(filename, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
+    # Analyze
     result = analyze_claim_image(filename)
     
+    # Decision Logic
     if result.get("decision", "").upper() == "APPROVE":
         # AI Pays Instantly
         tx = send_blockchain_tx("processInstantClaim", OWNER_WALLET, result.get("estimated_cost_usd", 0))

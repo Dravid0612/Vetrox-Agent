@@ -38,15 +38,12 @@ const Dashboard = () => {
     formData.append('file', file);
 
     try {
-<<<<<<< HEAD
+
       const response = await axios.post('http://localhost:8000/analyze', formData);
-=======
+
       // Force a 3-second delay so we can enjoy the cool animation
       await new Promise(r => setTimeout(r, 3000));
       
-     const response = await axios.post("http://127.0.0.1:8000/analyze", formData);
->>>>>>> 50a7cedb33e9b4cce7fa93a82b2091a3a92aa004
-      setResult(response.data);
     } catch (error) {
       console.error(error);
       alert("Error connecting to VETROX Core");
