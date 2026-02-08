@@ -5,3 +5,4 @@ python-multipart
 requests
 google-generativeai
 web3==6.0.0
+setuptools
