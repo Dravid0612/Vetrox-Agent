@@ -1,5 +1,7 @@
 fastapi
 uvicorn
-python-multipart
-google-genai
 python-dotenv
+python-multipart
+requests
+google-generativeai
+web3==6.0.0
