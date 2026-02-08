@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { Upload, CheckCircle, XCircle, Activity, DollarSign, ExternalLink, Box, Server, Eye } from 'lucide-react';
+import { Upload, CheckCircle, XCircle, Activity, DollarSign, ExternalLink, Box, Server } from 'lucide-react';
 
 const Dashboard = () => {
   const [file, setFile] = useState(null);
@@ -38,14 +38,7 @@ const Dashboard = () => {
     formData.append('file', file);
 
     try {
-<<<<<<< HEAD
       const response = await axios.post('http://localhost:8000/analyze', formData);
-=======
-      // Force a 3-second delay so we can enjoy the cool animation
-      await new Promise(r => setTimeout(r, 3000));
-      
-     const response = await axios.post("http://127.0.0.1:8000/analyze", formData);
->>>>>>> 50a7cedb33e9b4cce7fa93a82b2091a3a92aa004
       setResult(response.data);
     } catch (error) {
       console.error(error);
@@ -74,7 +67,6 @@ const Dashboard = () => {
                ${loading ? 'bg-orange-400 shadow-orange-500 animate-pulse' : 'bg-cyan-400 shadow-cyan-500'}`}
              style={loading ? {} : pupilStyle} // Disable tracking when loading
            >
-              {/* If loading, add a "Scanning" horizontal move animation via CSS class if needed, or just pulse */}
            </div>
            
            {/* Scanning Line (Only visible when loading) */}
