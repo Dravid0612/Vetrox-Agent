@@ -1,23 +1,51 @@
 import os
 import json
 import shutil
+import uuid
 import uvicorn
-from fastapi import FastAPI, UploadFile, File
+import warnings
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from web3 import Web3
+from web3.middleware import geth_poa_middleware
 import google.generativeai as genai
+from dotenv import load_dotenv 
+load_dotenv()
+# --- 1. CONFIGURATION ---
+warnings.filterwarnings("ignore")
 
-# --- CONFIGURATION ---
-GEMINI_API_KEY="AIzaSyBOg1K2Bujp-HhIDAVd8fXTie1ivmanmCo"
+# 🔑 FILL THESE IN!
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+OWNER_WALLET = "0x8adE4c7e51c1cf9c314641154fF7aa83a39Cf2ba"
+OWNER_PRIVATE_KEY = "11f155cc425d0af9a2e794d2413ad55915d604aef912828a01ec2a3ffc6b0fd7"
 
-# Cronos Testnet Settings
-CRONOS_RPC = "https://evm-t3.cronos.org"
-SENDER_ADDRESS = "0x8adE4c7e51c1cf9c314641154fF7aa83a39Cf2ba"
-SENDER_PRIVATE_KEY = "11f155cc425d0af9a2e794d2413ad55915d604aef912828a01ec2a3ffc6b0fd7" 
-RECEIVER_ADDRESS = "0x469a3eec26D6Df75fd8A27e152ce711a35272a14" # Target wallet for payout
+# 🔗 SEPOLIA CONFIGURATION
+RPC_URL = "https://rpc.sepolia.org"
+CHAIN_ID = 11155111
+CONTRACT_ADDRESS = "0x254112a5f7cDEb51AEfD16c903A705f0647B3921" 
+CONTRACT_ABI = [
+    {
+        "inputs": [{"internalType": "address payable","name": "_user","type": "address"},
+                   {"internalType": "uint256","name": "_amount","type": "uint256"}],
+        "name": "processInstantClaim",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [{"internalType": "address payable","name": "_user","type": "address"},
+                   {"internalType": "uint256","name": "_amount","type": "uint256"}],
+        "name": "payoutAppeal",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    }
+]
 
-# --- SETUP ---
+# --- 2. SETUP ---
 app = FastAPI()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,10 +54,45 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-genai.configure(api_key=GEMINI_API_KEY)
-w3 = Web3(Web3.HTTPProvider(CRONOS_RPC))
+os.makedirs("static", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+APPEALS_DB = []
 
-# --- HELPER FUNCTIONS ---
+genai.configure(api_key=GEMINI_API_KEY)
+w3 = Web3(Web3.HTTPProvider(RPC_URL))
+w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+contract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
+
+def send_blockchain_tx(function_name, user_address, amount_usd):
+    try:
+        if not w3.is_connected():
+            return {"status": "error", "message": "Blockchain disconnected"}
+
+        amount_eth = 0.0001 
+        amount_wei = w3.to_wei(amount_eth, 'ether')
+
+        func = contract.functions[function_name](user_address, amount_wei)
+        
+        tx = func.build_transaction({
+            'from': OWNER_WALLET,
+            'nonce': w3.eth.get_transaction_count(OWNER_WALLET),
+            'gas': 200000,
+            'gasPrice': w3.to_wei('10', 'gwei'),
+            'chainId': CHAIN_ID
+        })
+
+        signed_tx = w3.eth.account.sign_transaction(tx, OWNER_PRIVATE_KEY)
+        tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+        
+        return {
+            "status": "success",
+            "tx_hash": w3.to_hex(tx_hash),
+            "explorer": f"https://sepolia.etherscan.io/tx/{w3.to_hex(tx_hash)}"
+        }
+    except Exception as e:
+        print(f"Tx Error: {e}")
+        return {"status": "error", "message": str(e)}
+
 def analyze_claim_image(image_path):
     try:
         myfile = genai.upload_file(image_path)
@@ -39,96 +102,69 @@ def analyze_claim_image(image_path):
             "item_name": "Item Name",
             "damage_description": "Short description",
             "severity": "Low/Medium/High",
-            "estimated_cost": based on the severity and damage and item type,
+            "estimated_cost_usd": 150,
             "decision": "APPROVE" or "REJECT",
             "reason": "Reasoning"
         }
-        Rules: Approve if damage is clear and cost < half of the item's original value.
+        Rules: Approve ONLY if damage is extremely clear (like broken glass). and estimated cost < the actual cost of the item Reject if ambiguous.
         """
         model = genai.GenerativeModel("gemini-3-flash-preview")
         result = model.generate_content([myfile, prompt])
-        return result.text
+        clean = result.text.replace("```json", "").replace("```", "").strip()
+        return json.loads(clean)
     except Exception as e:
-        return json.dumps({"decision": "REJECT", "reason": f"AI Error: {str(e)}"})
+        return {"decision": "REJECT", "reason": f"AI Error: {str(e)}", "estimated_cost_usd": 0}
 
-def transfer_funds(amount_usd):
-    try:
-        if not w3.is_connected():
-            return _mock_transfer()
+# --- 4. API ENDPOINTS ---
 
-        # Send 0.01 TCRO
-        amount_to_send = 0.01 
-        nonce = w3.eth.get_transaction_count(SENDER_ADDRESS)
+@app.get("/appeals")
+def get_appeals():
+    """Get list of rejected claims"""
+    return APPEALS_DB
+
+@app.post("/approve_appeal/{claim_id}")
+def approve_appeal(claim_id: str):
+    """Admin manually approves a claim"""
+    claim = next((item for item in APPEALS_DB if item["id"] == claim_id), None)
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    
+    # Trigger Blockchain Payout
+    result = send_blockchain_tx("payoutAppeal", OWNER_WALLET, claim['amount'])
+    
+    if result.get("status") == "success":
+        APPEALS_DB.remove(claim) # Remove from list after paying
         
-        tx = {
-            'nonce': nonce,
-            'to': RECEIVER_ADDRESS,
-            'value': w3.to_wei(amount_to_send, 'ether'),
-            'gas': 200000,
-            'gasPrice': w3.to_wei('5000', 'gwei'),
-            'chainId': 338
-        }
+    return result
 
-        signed_tx = w3.eth.account.sign_transaction(tx, SENDER_PRIVATE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
-        tx_hash_hex = w3.to_hex(tx_hash)
-        
-        return {
-            "status": "success",
-            "amount": f"{amount_to_send} TCRO",
-            "transaction_id": tx_hash_hex,
-            "explorer_link": f"https://explorer.cronos.org/testnet/tx/{tx_hash_hex}"
-        }
-    except Exception:
-        return _mock_transfer()
-
-def _mock_transfer():
-    return {
-        "status": "simulated",
-        "amount": "250 USD (Simulated)",
-        "transaction_id": "0xSIMULATED_HASH_FOR_DEMO",
-        "explorer_link": "#"
-    }
-
-# --- API ENDPOINT ---
 @app.post("/analyze")
 async def analyze_endpoint(file: UploadFile = File(...)):
-    temp_filename = f"temp_{file.filename}"
+    claim_id = str(uuid.uuid4())[:8]
+    filename = f"static/{claim_id}_{file.filename}"
     
-    try:
-        with open(temp_filename, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-            
-        # AI Analysis
-        raw_result = analyze_claim_image(temp_filename)
+    with open(filename, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
         
-        # Parse JSON
-        if isinstance(raw_result, str):
-            clean_json = raw_result.replace("```json", "").replace("```", "").strip()
-            try:
-                result = json.loads(clean_json)
-            except:
-                result = {"decision": "REJECT", "reason": "AI Parsing Error"}
-        else:
-            result = raw_result
+    result = analyze_claim_image(filename)
+    
+    if result.get("decision", "").upper() == "APPROVE":
+        # AI Pays Instantly
+        tx = send_blockchain_tx("processInstantClaim", OWNER_WALLET, result.get("estimated_cost_usd", 0))
+        result["payout"] = tx
+    else:
+        # Save to DB for Admin Review
+        appeal_record = {
+            "id": claim_id,
+            "item": result.get("item_name", "Unknown"),
+            "reason": result.get("reason", "Unknown"),
+            "amount": result.get("estimated_cost_usd", 0),
+            "image_url": f"http://localhost:8000/{filename}",
+            "status": "Pending Review"
+        }
+        APPEALS_DB.append(appeal_record)
+        result["appeal_status"] = "Sent to DAO for Review"
 
-        # Blockchain Logic
-        decision = result.get("decision", "").strip().upper()
-        if decision == "APPROVE":
-            payout_data = transfer_funds(result.get("estimated_cost", 0))
-            result["payout_details"] = payout_data
-            result["action_taken"] = "PAYOUT_SENT"
-        else:
-            result["action_taken"] = "NONE"
-            result["payout_details"] = None
-
-        if os.path.exists(temp_filename):
-            os.remove(temp_filename)
-            
-        return result
-
-    except Exception as e:
-        return {"error": str(e)}
+    return result
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
